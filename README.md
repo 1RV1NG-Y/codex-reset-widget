@@ -86,9 +86,11 @@ process reads the current limits and schedules one ephemeral, read-only
 If no five-hour window is active, it starts one immediately.
 
 Each activation consumes a tiny but nonzero amount of weekly usage. The scheduler
-pauses at the weekly limit, retries failures after one minute, and runs an
-independent one-minute watchdog so a missed long timer cannot leave the window
-idle. The widget shows both the next action and the last successful request.
+pauses at the weekly limit and retries failures after one minute. Activation and
+retry deadlines persist across restarts. Idle readings that slide forward to
+“now + five hours” cannot postpone a committed request. An independent one-minute
+watchdog dispatches overdue requests. The widget shows the next action and the
+last successful request.
 Disabling the toggle cancels the pending activation.
 
 Manage automatic startup with:

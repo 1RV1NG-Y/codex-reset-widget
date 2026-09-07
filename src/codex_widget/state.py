@@ -123,6 +123,12 @@ class StateStore:
                 if isinstance(document.get("last_window_keeper_error"), str)
                 else None
             ),
+            next_window_keeper_due_at=_parse_time(
+                document.get("next_window_keeper_due_at")
+            ),
+            next_window_keeper_retry_at=_parse_time(
+                document.get("next_window_keeper_retry_at")
+            ),
         )
 
     def save(self, state: AppState) -> None:
@@ -139,6 +145,12 @@ class StateStore:
                 state.last_window_keeper_success_at
             ),
             "last_window_keeper_error": state.last_window_keeper_error,
+            "next_window_keeper_due_at": _format_time(
+                state.next_window_keeper_due_at
+            ),
+            "next_window_keeper_retry_at": _format_time(
+                state.next_window_keeper_retry_at
+            ),
         }
         if state.last_global_reset is not None:
             event = state.last_global_reset
