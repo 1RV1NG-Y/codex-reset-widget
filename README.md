@@ -83,14 +83,20 @@ Use **ENABLE 5H AUTO-ROLL** in the widget to keep a five-hour window active
 continuously. The opt-in is persisted across restarts. When enabled, the resident
 process reads the current limits and schedules one ephemeral, read-only
 `gpt-5.6-luna` request for ten seconds after the active five-hour window resets.
-If no five-hour window is active, it starts one immediately.
+If no five-hour window is active, it attempts activation immediately.
 
-Each activation consumes a tiny but nonzero amount of weekly usage. The scheduler
-pauses at the weekly limit and retries failures after one minute. Activation and
-retry deadlines persist across restarts. Idle readings that slide forward to
-“now + five hours” cannot postpone a committed request. An independent one-minute
-watchdog dispatches overdue requests. The widget shows the next action and the
-last successful request.
+Command completion alone is not success. After each request the worker reads
+limits three times over 30 seconds. Only a future reset timestamp whose range
+stays within three seconds is marked verified; a sliding or missing timestamp
+is reported as activation unconfirmed. Rounded 0% usage is allowed when the
+timestamp is stable. This confirms an active countdown, not exclusive attribution
+to the widget if other clients are using the account.
+
+Each request consumes quota. Failed attempts retry after one minute; every third
+failure triggers a five-hour cooldown. Deadlines, verification and failure counts
+persist across restarts. Idle “now + five hours” readings cannot postpone a
+committed request or bypass retry backoff. The widget shows the next action and
+last verified window, never treating an old command-only success as verified.
 Disabling the toggle cancels the pending activation.
 
 Manage automatic startup with:

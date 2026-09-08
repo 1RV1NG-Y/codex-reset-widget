@@ -39,6 +39,8 @@ class AppState:
     last_window_keeper_error: str | None = None
     next_window_keeper_due_at: datetime | None = None
     next_window_keeper_retry_at: datetime | None = None
+    last_window_keeper_verified_at: datetime | None = None
+    window_keeper_failures: int = 0
     last_seen_reset_id: str | None = None
     last_global_reset: ResetEvent | None = None
     last_known_usage: UsageSnapshot | None = None

@@ -113,6 +113,7 @@ class WindowKeeperApplication:
         CodexWidgetApplication._record_window_keeper_outcome
     )
     _activate_and_read_usage = CodexWidgetApplication._activate_and_read_usage
+    _verify_window_keeper = CodexWidgetApplication._verify_window_keeper
     _window_keeper_activation_finished = (
         CodexWidgetApplication._window_keeper_activation_finished
     )
@@ -174,6 +175,7 @@ class KeeperCycleApplication:
         CodexWidgetApplication._window_keeper_schedule_refreshed
     )
     _activate_and_read_usage = CodexWidgetApplication._activate_and_read_usage
+    _verify_window_keeper = CodexWidgetApplication._verify_window_keeper
     _read_and_store_usage = CodexWidgetApplication._read_and_store_usage
     _read_and_store_usage_unlocked = (
         CodexWidgetApplication._read_and_store_usage_unlocked
@@ -253,6 +255,11 @@ def usage_snapshot(
 
 
 class WindowKeeperCycleTests(unittest.TestCase):
+    def setUp(self):
+        sleeper = patch("codex_widget.app.time.sleep")
+        sleeper.start()
+        self.addCleanup(sleeper.stop)
+
     def test_two_scheduler_cycles_survive_sliding_idle_observations(self):
         now = datetime(2026, 9, 6, 12, tzinfo=UTC)
         requests = []
@@ -452,25 +459,7 @@ class WindowKeeperTests(unittest.TestCase):
         self.assertEqual(application._window_keeper_source, 72)
         self.assertIn("next tiny request", application.messages[-1])
 
-    def test_schedule_status_exposes_last_successful_request(self):
-        now = datetime(2026, 8, 31, 10, tzinfo=UTC)
-        application = WindowKeeperApplication()
-        application.state_store.state.last_window_keeper_success_at = (
-            now - timedelta(minutes=3)
-        )
 
-        with (
-            patch("codex_widget.app.utc_now", return_value=now),
-            patch(
-                "codex_widget.app.GLib.timeout_add_seconds",
-                return_value=72,
-            ),
-        ):
-            application._schedule_window_keeper_from_usage(
-                usage_snapshot(five_hour_reset=now + timedelta(hours=1))
-            )
-
-        self.assertIn("last sent", application.messages[-1])
 
     def test_weekly_limit_pauses_activation_until_weekly_reset(self):
         now = datetime(2026, 8, 31, 10, tzinfo=UTC)
@@ -575,7 +564,7 @@ class WindowKeeperTests(unittest.TestCase):
 
         with patch(
             "codex_widget.app.utc_now",
-            side_effect=[attempted, succeeded],
+            side_effect=[attempted, succeeded, succeeded, succeeded, succeeded],
         ):
             result = application._activate_and_read_usage()
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
+import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 import math
@@ -578,6 +579,9 @@ class CodexWidgetApplication(Gtk.Application):
             self._record_window_keeper_outcome(attempted_at=attempted_at)
             try:
                 self.codex.activate_five_hour_window()
+                usage = self._verify_window_keeper()
+                if usage is None:
+                    return None
             except Exception as exc:
                 self._record_window_keeper_outcome(
                     attempted_at=attempted_at,
@@ -588,7 +592,31 @@ class CodexWidgetApplication(Gtk.Application):
                 attempted_at=attempted_at,
                 succeeded_at=utc_now(),
             )
-            return self._read_and_store_usage_unlocked()
+            with self._state_lock:
+                state = self.state_store.load()
+                state.next_window_keeper_due_at = usage.five_hour_reset_at + timedelta(
+                    seconds=_WINDOW_KEEPER_GRACE_SECONDS
+                )
+                self.state_store.save(state)
+            return usage
+
+    def _verify_window_keeper(self) -> UsageSnapshot | None:
+        samples = []
+        for index in range(3):
+            if index:
+                time.sleep(15)
+            if not self._window_keeper_enabled():
+                return None
+            samples.append(self._read_and_store_usage_unlocked())
+        resets = [sample.five_hour_reset_at for sample in samples]
+        if any(reset is None or reset <= utc_now() for reset in resets):
+            raise CodexClientError("Activation unconfirmed: no future reset reported")
+        drift = (max(resets) - min(resets)).total_seconds()
+        if drift > 3:
+            raise CodexClientError(
+                f"Activation unconfirmed: reset moved {drift:.0f}s during 30s verification"
+            )
+        return samples[-1]
 
     def _record_window_keeper_outcome(
         self,
@@ -602,11 +630,15 @@ class CodexWidgetApplication(Gtk.Application):
             state.last_window_keeper_attempt_at = attempted_at
             if succeeded_at is not None:
                 state.last_window_keeper_success_at = succeeded_at
+                state.last_window_keeper_verified_at = succeeded_at
+                state.window_keeper_failures = 0
                 state.next_window_keeper_due_at = succeeded_at + timedelta(
                     seconds=_WINDOW_KEEPER_DEFAULT_WINDOW_SECONDS
                     + _WINDOW_KEEPER_GRACE_SECONDS
                 )
                 state.next_window_keeper_retry_at = None
+            if error:
+                state.window_keeper_failures += 1
             state.last_window_keeper_error = error[:500] if error else None
             self.state_store.save(state)
 
@@ -614,13 +646,13 @@ class CodexWidgetApplication(Gtk.Application):
         with self._state_lock:
             state = self.state_store.load()
         if state.last_window_keeper_error:
-            return " · last attempt failed"
-        if state.last_window_keeper_success_at is not None:
+            return f" · {state.last_window_keeper_error}"
+        if state.last_window_keeper_verified_at is not None:
             return (
-                " · last sent "
-                f"{state.last_window_keeper_success_at.astimezone():%H:%M}"
+                " · last verified "
+                f"{state.last_window_keeper_verified_at.astimezone():%H:%M}"
             )
-        return ""
+        return " · window activation not verified"
 
     def _window_keeper_activation_finished(
         self,
@@ -632,9 +664,14 @@ class CodexWidgetApplication(Gtk.Application):
             return
         if error is not None or usage is None:
             detail = str(error) if error is not None else "usage unavailable"
+            with self._state_lock:
+                failures = self.state_store.load().window_keeper_failures
+            cooldown = failures > 0 and failures % 3 == 0
+            delay = 5 * 60 * 60 if cooldown else _WINDOW_KEEPER_RETRY_SECONDS
+            wait = "5h cooldown after three failures" if cooldown else "retrying in 1m"
             self._schedule_window_keeper_retry(
-                _WINDOW_KEEPER_RETRY_SECONDS,
-                f"5-hour activation failed; retrying in 1m: {detail}",
+                delay,
+                f"5-hour activation unconfirmed; {wait}: {detail}",
             )
             return
         if (
