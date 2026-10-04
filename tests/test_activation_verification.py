@@ -21,7 +21,7 @@ class ActivationVerificationTests(unittest.TestCase):
             _window_keeper_enabled=Mock(side_effect=enabled) if enabled else lambda: True,
             _read_and_store_usage_unlocked=Mock(side_effect=samples),
         )
-        with patch('codex_widget.app.time.sleep'), patch('codex_widget.app.utc_now', return_value=now):
+        with patch('codex_widget.window_keeper.time.sleep'), patch('codex_widget.window_keeper.utc_now', return_value=now):
             return CodexWidgetApplication._verify_window_keeper(app)
 
     def test_fixed_reset_accepts_rounded_zero_usage(self):
@@ -53,7 +53,7 @@ class ActivationVerificationTests(unittest.TestCase):
             UsageSnapshot(0, None, 10080, 0, five_hour_reset_at=now + timedelta(seconds=offset))
             for offset in [18000, 18015, 18030] * 3
         ])
-        with patch('codex_widget.app.time.sleep'), patch('codex_widget.app.utc_now', return_value=now), patch('codex_widget.app.GLib.source_remove'), patch('codex_widget.app.GLib.timeout_add_seconds', return_value=1) as timer:
+        with patch('codex_widget.window_keeper.time.sleep'), patch('codex_widget.window_keeper.utc_now', return_value=now), patch('codex_widget.app.GLib.source_remove'), patch('codex_widget.app.GLib.timeout_add_seconds', return_value=1) as timer:
             for _ in range(3):
                 try:
                     app._activate_and_read_usage()

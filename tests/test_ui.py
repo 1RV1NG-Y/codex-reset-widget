@@ -45,6 +45,8 @@ class FakeWindow:
     def __init__(self, *, pinned: bool = False, active: bool = False):
         self.pin_button = FakeButton(pinned)
         self.keeper_button = FakeButton()
+        self.provider_button = FakeButton()
+        self.reset_offers_button = FakeButton()
         self.active = active
         self.hidden = False
         self.moved_to = None
@@ -137,6 +139,20 @@ class WidgetInteractionTests(unittest.TestCase):
 
         self.assertFalse(handled)
         self.assertFalse(window._dragging)
+
+    def test_provider_and_reset_offer_buttons_do_not_start_a_drag(self):
+        window = FakeWindow()
+        event = SimpleNamespace(button=1, x_root=100, y_root=200)
+        for button in (window.provider_button, window.reset_offers_button):
+            with patch("codex_widget.ui.Gtk.get_event_widget", return_value=button):
+                self.assertFalse(WidgetWindow._on_drag_press(window, None, event))
+        self.assertFalse(window._dragging)
+
+    def test_brand_click_switches_provider(self):
+        application = Mock()
+        window = SimpleNamespace(get_application=lambda: application)
+        WidgetWindow._on_provider_clicked(window, None)
+        application.toggle_provider.assert_called_once_with()
 
     def test_keeper_toggle_updates_application_setting(self):
         application = Mock()

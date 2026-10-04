@@ -256,7 +256,7 @@ def usage_snapshot(
 
 class WindowKeeperCycleTests(unittest.TestCase):
     def setUp(self):
-        sleeper = patch("codex_widget.app.time.sleep")
+        sleeper = patch("codex_widget.window_keeper.time.sleep")
         sleeper.start()
         self.addCleanup(sleeper.stop)
 
@@ -292,7 +292,7 @@ class WindowKeeperCycleTests(unittest.TestCase):
                 return len(timers)
 
             with (
-                patch("codex_widget.app.utc_now", side_effect=lambda: now),
+                patch("codex_widget.window_keeper.utc_now", side_effect=lambda: now),
                 patch(
                     "codex_widget.app.GLib.timeout_add_seconds",
                     side_effect=schedule,
@@ -358,7 +358,7 @@ class WindowKeeperCycleTests(unittest.TestCase):
                 return len(timers)
 
             with (
-                patch("codex_widget.app.utc_now", side_effect=lambda: now),
+                patch("codex_widget.window_keeper.utc_now", side_effect=lambda: now),
                 patch(
                     "codex_widget.app.GLib.timeout_add_seconds",
                     side_effect=schedule,
@@ -419,7 +419,7 @@ class WindowKeeperCycleTests(unittest.TestCase):
                 return len(timers)
 
             with (
-                patch("codex_widget.app.utc_now", side_effect=lambda: now),
+                patch("codex_widget.window_keeper.utc_now", side_effect=lambda: now),
                 patch(
                     "codex_widget.app.GLib.timeout_add_seconds",
                     side_effect=schedule,
@@ -447,7 +447,7 @@ class WindowKeeperTests(unittest.TestCase):
         usage = usage_snapshot(five_hour_reset=now + timedelta(hours=1))
 
         with (
-            patch("codex_widget.app.utc_now", return_value=now),
+            patch("codex_widget.window_keeper.utc_now", return_value=now),
             patch(
                 "codex_widget.app.GLib.timeout_add_seconds",
                 return_value=72,
@@ -471,7 +471,7 @@ class WindowKeeperTests(unittest.TestCase):
         )
 
         with (
-            patch("codex_widget.app.utc_now", return_value=now),
+            patch("codex_widget.window_keeper.utc_now", return_value=now),
             patch(
                 "codex_widget.app.GLib.timeout_add_seconds",
                 return_value=73,
@@ -487,7 +487,7 @@ class WindowKeeperTests(unittest.TestCase):
         application = WindowKeeperApplication()
 
         with (
-            patch("codex_widget.app.utc_now", return_value=now),
+            patch("codex_widget.window_keeper.utc_now", return_value=now),
             patch(
                 "codex_widget.app.GLib.timeout_add_seconds",
                 return_value=74,
@@ -546,7 +546,7 @@ class WindowKeeperTests(unittest.TestCase):
             five_hour_reset=now - timedelta(minutes=2)
         )
 
-        with patch("codex_widget.app.utc_now", return_value=now):
+        with patch("codex_widget.window_keeper.utc_now", return_value=now):
             result = application._window_keeper_watchdog_tick()
 
         self.assertEqual(result, GLib.SOURCE_CONTINUE)
@@ -563,7 +563,7 @@ class WindowKeeperTests(unittest.TestCase):
         application._read_and_store_usage_unlocked = lambda: expected
 
         with patch(
-            "codex_widget.app.utc_now",
+            "codex_widget.window_keeper.utc_now",
             side_effect=[attempted, succeeded, succeeded, succeeded, succeeded],
         ):
             result = application._activate_and_read_usage()
@@ -583,7 +583,7 @@ class WindowKeeperTests(unittest.TestCase):
 
         application.codex = SimpleNamespace(activate_five_hour_window=fail)
         with (
-            patch("codex_widget.app.utc_now", return_value=attempted),
+            patch("codex_widget.window_keeper.utc_now", return_value=attempted),
             self.assertRaisesRegex(RuntimeError, "network unavailable"),
         ):
             application._activate_and_read_usage()

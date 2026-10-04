@@ -106,6 +106,9 @@ class StateStore:
 
         last_seen = document.get("last_seen_reset_id")
         return AppState(
+            selected_provider=(
+                "claude" if document.get("selected_provider") == "claude" else "codex"
+            ),
             last_seen_reset_id=last_seen if isinstance(last_seen, str) else None,
             last_global_reset=reset,
             last_known_usage=usage,
@@ -141,6 +144,7 @@ class StateStore:
     def save(self, state: AppState) -> None:
         document: dict[str, Any] = {
             "version": _STATE_VERSION,
+            "selected_provider": state.selected_provider,
             "last_seen_reset_id": state.last_seen_reset_id,
             "last_global_reset": None,
             "last_known_usage": None,

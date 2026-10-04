@@ -1,15 +1,86 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 import unittest
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from codex_widget.codex_client import CodexClient, CodexClientError
+from codex_widget.codex_client import CodexClient, CodexClientError, _resolve_executable
 
 
 class CodexClientTests(unittest.TestCase):
+    def test_resolves_native_cli_for_supported_npm_layouts(self):
+        for layout in ("nested", "sibling", "legacy"):
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as directory:
+                scope = Path(directory) / "node_modules" / "@openai"
+                package = scope / "codex"
+                launcher = package / "bin" / "codex.js"
+                launcher.parent.mkdir(parents=True)
+                launcher.write_text("#!/usr/bin/env node\n")
+                link = Path(directory) / "codex"
+                link.symlink_to(launcher)
+                if layout == "nested":
+                    vendor = package / "node_modules" / "@openai" / "codex-linux-x64" / "vendor"
+                elif layout == "sibling":
+                    vendor = scope / "codex-linux-x64" / "vendor"
+                else:
+                    vendor = package / "vendor"
+                native = vendor / "x86_64-unknown-linux-musl" / (
+                    "codex" if layout == "legacy" else "bin"
+                ) / "codex"
+                native.parent.mkdir(parents=True)
+                native.write_text("#!/bin/sh\n")
+                native.chmod(0o755)
+                with (
+                    patch("codex_widget.codex_client.shutil.which", return_value=str(link)),
+                    patch("codex_widget.codex_client.platform.system", return_value="Linux"),
+                    patch("codex_widget.codex_client.platform.machine", return_value="x86_64"),
+                ):
+                    self.assertEqual(CodexClient().executable, str(native))
+                    native.chmod(0o644)
+                    self.assertEqual(_resolve_executable("codex"), "codex")
+                    native.unlink()
+                    self.assertEqual(_resolve_executable("codex"), "codex")
+
+    def test_resolves_native_arm64_cli(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / "@openai" / "codex"
+            launcher = package / "bin" / "codex.js"
+            launcher.parent.mkdir(parents=True)
+            launcher.touch()
+            native = package / "vendor" / "aarch64-unknown-linux-musl" / "bin" / "codex"
+            native.parent.mkdir(parents=True)
+            native.touch()
+            native.chmod(0o755)
+            with (
+                patch("codex_widget.codex_client.shutil.which", return_value=str(launcher)),
+                patch("codex_widget.codex_client.platform.system", return_value="Linux"),
+                patch("codex_widget.codex_client.platform.machine", return_value="aarch64"),
+            ):
+                self.assertEqual(_resolve_executable("codex"), str(native))
+
+    def test_preserves_custom_or_missing_executables(self):
+        for resolved in (None, "/custom/codex", "/custom/bin/codex.js"):
+            with self.subTest(resolved=resolved), patch(
+                "codex_widget.codex_client.shutil.which", return_value=resolved
+            ):
+                self.assertEqual(_resolve_executable("/custom/codex"), "/custom/codex")
+
+    def test_reports_startup_failure_detail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "codex"
+            executable.write_text(
+                "#!/bin/sh\n"
+                "echo 'node: error while loading shared libraries: libsimdjson.so.33' >&2\n"
+                "exit 1\n"
+            )
+            executable.chmod(0o755)
+            with self.assertRaisesRegex(CodexClientError, "libsimdjson.so.33"):
+                CodexClient(executable=str(executable)).read_rate_limits()
+
     def test_parses_weekly_window_by_duration_and_banked_credits(self):
         snapshot = CodexClient._parse_snapshot(
             {

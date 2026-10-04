@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import json
+import os
+import platform
 import selectors
+import shutil
 import subprocess
+import tempfile
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from .models import UsageSnapshot
+from . import __version__
 
 
 class CodexClientError(RuntimeError):
@@ -29,6 +35,41 @@ def _number(value: object) -> float | None:
     return float(value)
 
 
+def _resolve_executable(executable: str) -> str:
+    """Use the npm package's native CLI without depending on its Node launcher."""
+    installed = shutil.which(executable)
+    if installed is None or platform.system() != "Linux":
+        return executable
+    launcher = Path(installed).resolve()
+    package = launcher.parent.parent
+    if (
+        launcher.name != "codex.js"
+        or launcher.parent.name != "bin"
+        or package.name != "codex"
+        or package.parent.name != "@openai"
+    ):
+        return executable
+
+    architecture = {
+        "x86_64": ("x64", "x86_64-unknown-linux-musl"),
+        "aarch64": ("arm64", "aarch64-unknown-linux-musl"),
+    }.get(platform.machine())
+    if architecture is None:
+        return executable
+    suffix, target = architecture
+    vendor_roots = (
+        package / "node_modules" / "@openai" / f"codex-linux-{suffix}" / "vendor",
+        package.parent / f"codex-linux-{suffix}" / "vendor",
+        package / "vendor",
+    )
+    for root in vendor_roots:
+        for directory in ("bin", "codex"):
+            native = root / target / directory / "codex"
+            if native.is_file() and os.access(native, os.X_OK):
+                return str(native)
+    return executable
+
+
 class CodexClient:
     def __init__(
         self,
@@ -38,22 +79,24 @@ class CodexClient:
         activation_timeout: float = 60.0,
         activation_model: str = "gpt-5.6-luna",
     ) -> None:
-        self.executable = executable
+        self.executable = _resolve_executable(executable)
         self.timeout = timeout
         self.activation_timeout = activation_timeout
         self.activation_model = activation_model
 
     def read_rate_limits(self) -> UsageSnapshot:
+        stderr = tempfile.TemporaryFile()
         try:
             process = subprocess.Popen(
                 [self.executable, "app-server", "--stdio"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=stderr,
                 text=True,
                 bufsize=1,
             )
         except OSError as exc:
+            stderr.close()
             raise CodexClientError(f"cannot start Codex app-server: {exc}") from exc
 
         try:
@@ -66,7 +109,7 @@ class CodexClient:
                         "clientInfo": {
                             "name": "codex-widget",
                             "title": "Codex Widget",
-                            "version": "0.1.0",
+                            "version": __version__,
                         }
                     },
                 },
@@ -80,6 +123,20 @@ class CodexClient:
             if not isinstance(result, dict):
                 raise CodexClientError("Codex returned no rate-limit result")
             return self._parse_snapshot(result)
+        except CodexClientError as exc:
+            try:
+                process.wait(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                pass
+            if process.poll() is not None:
+                stderr.seek(0, os.SEEK_END)
+                stderr.seek(max(0, stderr.tell() - 2048))
+                detail = (
+                    stderr.read().decode("utf-8", errors="replace").strip().splitlines()
+                )
+                if detail:
+                    raise CodexClientError(f"{exc}: {detail[-1][:500]}") from exc
+            raise
         finally:
             if process.stdin is not None and not process.stdin.closed:
                 process.stdin.close()
@@ -92,6 +149,9 @@ class CodexClient:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
+            if process.stdout is not None:
+                process.stdout.close()
+            stderr.close()
 
     def activate_five_hour_window(self) -> None:
         arguments = [

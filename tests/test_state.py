@@ -15,6 +15,7 @@ class StateStoreTests(unittest.TestCase):
             path = Path(directory) / "state.json"
             store = StateStore(path)
             state = AppState(
+                selected_provider="claude",
                 keep_five_hour_window_active=True,
                 next_window_keeper_due_at=datetime(
                     2026, 8, 10, 15, 0, 10, tzinfo=UTC
@@ -61,6 +62,9 @@ class StateStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = StateStore(Path(directory) / "state.json")
             self.assertEqual(store.load(), AppState())
+
+            store.path.write_text('{"selected_provider": "unknown"}')
+            self.assertEqual(store.load().selected_provider, "codex")
 
             store.path.write_text("not json")
             self.assertEqual(store.load(), AppState())

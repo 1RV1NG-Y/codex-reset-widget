@@ -33,6 +33,7 @@ class UsageSnapshot:
 
 @dataclass(slots=True)
 class AppState:
+    selected_provider: str = "codex"
     keep_five_hour_window_active: bool = False
     last_window_keeper_attempt_at: datetime | None = None
     last_window_keeper_success_at: datetime | None = None
