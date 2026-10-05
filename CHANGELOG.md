@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 — 2026-10-04
+
+- Fix Claude token renewal requests by including saved OAuth scopes and the widget user agent, and save rotated access/refresh tokens with both expiry times.
+- Check actual usage authorization before renewing; stale local expiry timestamps no longer interrupt working tokens. Distinguish temporary HTTP failures from an explicitly expired login, and respect renewal rate-limit backoff.
+- Match Claude progress bar borders to the orange fill instead of inheriting the GTK theme's blue border.
+
 ## 0.2.0 — 2026-10-04
 
 - Automatically detect Claude Code and switch providers by clicking the widget's header. Claude uses orange accents; Codex retains blue accents.

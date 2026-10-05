@@ -137,7 +137,13 @@ and missing or expired subscription authentication produces a sign-in message in
 the Claude view. `CLAUDE_CONFIG_DIR` is supported. The widget reads Claude's own
 OAuth usage endpoint for five-hour and weekly percentages and reset timestamps.
 It reuses and, when possible, renews Claude Code's saved login; tokens are never
-copied into widget state. The usage endpoint is an internal Claude interface and
+copied into widget state. Renewal sends the saved OAuth scopes and a widget user
+agent, and saves both rotated tokens and their expiry times together. The widget
+checks usage before renewing, so a stale local expiry timestamp does not interrupt
+a working token. It picks up login changes made by Claude Code without restarting.
+Temporary renewal or access failures report their HTTP status and retry. A rejected
+refresh token or repeated unauthorized usage asks you to sign in again.
+The usage endpoint is an internal Claude interface and
 may change independently of this widget.
 
 The same auto-roll toggle works in Claude with its own persisted opt-in, retry

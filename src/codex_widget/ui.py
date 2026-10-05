@@ -56,8 +56,8 @@ window.codex-widget {
 #keeper:checked { background: #163a66; border-color: #60a5fa; color: #ffffff; }
 #keeper-status { color: #8c93a2; font-size: 11px; }
 progressbar trough { min-height: 8px; border-radius: 8px; background: #292d36; }
-progressbar progress { min-height: 8px; border-radius: 8px; background: #60a5fa; }
-window.claude-widget progressbar progress { background: #fb923c; }
+progressbar progress { min-height: 8px; border-radius: 8px; background: #60a5fa; border-color: #60a5fa; box-shadow: none; }
+window.claude-widget progressbar progress { background: #fb923c; border-color: #fb923c; }
 window.claude-widget #provider-switch:hover #brand { color: #fb923c; }
 window.claude-widget #pin:hover { border-color: #fb923c; }
 window.claude-widget #pin:checked { background: #c45f32; border-color: #fb923c; }

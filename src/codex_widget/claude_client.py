@@ -14,6 +14,7 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from . import __version__
 from .models import UsageSnapshot
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
@@ -22,6 +23,7 @@ _TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 # Public client identifier shipped in Claude Code's OAuth configuration.
 _CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 _MAX_BYTES = 1_000_000
+_USER_AGENT = f"codex-widget/{__version__}"
 
 
 class ClaudeClientError(RuntimeError):
@@ -107,23 +109,44 @@ class ClaudeClient:
             if not isinstance(refresh, str) or not refresh:
                 raise ClaudeClientError("Claude session expired; run claude auth login")
             try:
+                payload = {
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh,
+                    "client_id": _CLIENT_ID,
+                }
+                scopes = oauth.get("scopes")
+                if isinstance(scopes, list) and scopes and all(isinstance(s, str) for s in scopes):
+                    payload["scope"] = " ".join(scopes)
                 result = self._request(Request(
                     _TOKEN_URL,
-                    data=json.dumps({
-                        "grant_type": "refresh_token",
-                        "refresh_token": refresh,
-                        "client_id": _CLIENT_ID,
-                    }).encode(),
-                    headers={"Content-Type": "application/json", "Accept": "application/json"},
+                    data=json.dumps(payload).encode(),
+                    headers={
+                        "Content-Type": "application/json", "Accept": "application/json",
+                        "User-Agent": _USER_AGENT,
+                    },
                     method="POST",
                 ))
             except HTTPError as exc:
-                exc.close()
+                # Only an explicit OAuth rejection means the saved login expired.
+                # Edge-service failures (including 403) must not be called logout.
+                try:
+                    failure = json.loads(exc.read(_MAX_BYTES + 1))
+                except (UnicodeDecodeError, ValueError, OSError):
+                    failure = None
+                finally:
+                    exc.close()
                 # Claude Code may have refreshed concurrently; never expose a token body.
                 _, latest = self._credentials()
                 if latest["accessToken"] != old_token:
                     return latest["accessToken"]
-                raise ClaudeClientError("Claude session expired; run claude auth login") from None
+                if isinstance(failure, dict) and failure.get("error") == "invalid_grant":
+                    raise ClaudeClientError("Claude session expired; run claude auth login") from None
+                if exc.code == 429:
+                    self._retry_at = time.monotonic() + 300
+                    raise ClaudeClientError("Claude login renewal rate limited; retrying in 5m") from None
+                raise ClaudeClientError(
+                    f"Claude login renewal failed (HTTP {exc.code}); retrying automatically"
+                ) from None
             token = result.get("access_token")
             expiry = result.get("expires_in")
             if (
@@ -131,7 +154,7 @@ class ClaudeClient:
                 or type(expiry) not in (int, float)
                 or not math.isfinite(expiry) or expiry <= 0
             ):
-                raise ClaudeClientError("Claude could not renew the login; run claude auth login")
+                raise ClaudeClientError("Claude returned invalid login renewal data; retrying automatically")
             document, latest = self._credentials()
             if latest["accessToken"] != old_token:
                 return latest["accessToken"]
@@ -141,6 +164,12 @@ class ClaudeClient:
                 latest["refreshToken"] = result["refresh_token"]
             if isinstance(result.get("scope"), str):
                 latest["scopes"] = result["scope"].split()
+            refresh_expiry = result.get("refresh_token_expires_in")
+            if (
+                type(refresh_expiry) in (int, float)
+                and math.isfinite(refresh_expiry) and refresh_expiry > 0
+            ):
+                latest["refreshTokenExpiresAt"] = int((time.time() + refresh_expiry) * 1000)
             fd, temporary = tempfile.mkstemp(dir=self.credentials_path.parent)
             try:
                 with os.fdopen(fd, "w") as output:
@@ -161,9 +190,8 @@ class ClaudeClient:
             else:
                 _, oauth = self._credentials()
                 token = oauth["accessToken"]
-                expires = oauth.get("expiresAt")
-                if type(expires) in (int, float) and expires <= (time.time() + 60) * 1000:
-                    token = self._refresh_token(token)
+                # Ask usage first: the server decides whether this token is still
+                # usable. A stale local expiry must not interrupt working usage.
             if not force and token == self._cache_token and time.monotonic() < self._next_fetch:
                 if self._cached is not None:
                     return self._cached
@@ -173,7 +201,7 @@ class ClaudeClient:
                     document = self._request(Request(USAGE_URL, headers={
                         "Authorization": f"Bearer {token}",
                         "anthropic-beta": "oauth-2025-04-20",
-                        "User-Agent": "codex-widget/0.1.0",
+                        "User-Agent": _USER_AGENT,
                         "Accept": "application/json",
                     }))
                     break
@@ -182,8 +210,10 @@ class ClaudeClient:
                     if exc.code == 401 and attempt == 0 and not env_token:
                         token = self._refresh_token(token)
                         continue
-                    if exc.code in (401, 403):
+                    if exc.code == 401:
                         raise ClaudeClientError("Claude login cannot read usage; run claude auth login") from None
+                    if exc.code == 403:
+                        raise ClaudeClientError("Claude usage access denied (HTTP 403); retrying automatically") from None
                     if exc.code == 429:
                         self._retry_at = time.monotonic() + 300
                         raise ClaudeClientError("Claude usage rate limited; retrying in 5m") from None

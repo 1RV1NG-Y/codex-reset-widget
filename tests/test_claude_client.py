@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
 
+from codex_widget import __version__
 from codex_widget.claude_client import ClaudeClient, ClaudeClientError, USAGE_URL, detect_claude
 
 
@@ -81,18 +82,37 @@ class ClaudeClientTests(unittest.TestCase):
     def test_refreshes_expired_credentials_and_preserves_other_fields(self):
         document = json.loads(self.path.read_text())
         document["claudeAiOauth"]["expiresAt"] = 0
+        document["claudeAiOauth"]["scopes"] = ["user:profile", "user:inference"]
         self.path.write_text(json.dumps(document))
         opener = Mock(side_effect=[
-            response({"access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 3600}),
+            HTTPError(USAGE_URL, 401, "Unauthorized", {}, None),
+            response({"access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 3600,
+                      "refresh_token_expires_in": 7200}),
             response(self.data),
         ])
-        self.client(opener).read_rate_limits()
+        with patch("codex_widget.claude_client.time.time", return_value=1000):
+            self.client(opener).read_rate_limits()
         saved = json.loads(self.path.read_text())
         self.assertEqual(saved["claudeAiOauth"]["accessToken"], "new-access")
+        self.assertEqual(saved["claudeAiOauth"]["refreshToken"], "new-refresh")
+        self.assertEqual(saved["claudeAiOauth"]["expiresAt"], 4_600_000)
+        self.assertEqual(saved["claudeAiOauth"]["refreshTokenExpiresAt"], 8_200_000)
         self.assertEqual(saved["claudeAiOauth"]["subscriptionType"], "pro")
         self.assertEqual(saved["otherCredential"], {"preserve": True})
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(opener.call_args.args[0].get_header("Authorization"), "Bearer new-access")
+        renewal = opener.call_args_list[1].args[0]
+        self.assertEqual(json.loads(renewal.data)["scope"], "user:profile user:inference")
+        self.assertEqual(renewal.get_header("User-agent"), f"codex-widget/{__version__}")
+
+    def test_stale_local_expiry_does_not_interrupt_working_usage(self):
+        document = json.loads(self.path.read_text())
+        document["claudeAiOauth"]["expiresAt"] = 0
+        self.path.write_text(json.dumps(document))
+        opener = Mock(return_value=response(self.data))
+        self.assertEqual(self.client(opener).read_rate_limits().used_percent, 42)
+        self.assertEqual(opener.call_count, 1)
+        self.assertEqual(opener.call_args.args[0].full_url, USAGE_URL)
 
     def test_unauthorized_usage_refreshes_once(self):
         opener = Mock(side_effect=[
@@ -106,12 +126,79 @@ class ClaudeClientTests(unittest.TestCase):
     def test_failed_login_never_leaks_token_error_bodies(self):
         opener = Mock(side_effect=[
             HTTPError(USAGE_URL, 401, "test-access", {}, None),
-            HTTPError(USAGE_URL, 400, "test-refresh", {}, None),
+            HTTPError(USAGE_URL, 400, "test-refresh", {}, response({
+                "error": "invalid_grant", "error_description": "test-refresh",
+            })),
         ])
         with self.assertRaisesRegex(ClaudeClientError, "claude auth login") as caught:
             self.client(opener).read_rate_limits()
         self.assertNotIn("test-access", str(caught.exception))
         self.assertNotIn("test-refresh", str(caught.exception))
+
+    def test_temporary_renewal_failures_do_not_claim_logout(self):
+        for status, body in (
+            (403, {"status": 403, "cloudflare_error": True, "detail": "test-refresh"}),
+            (500, {"error": "server_error"}),
+            (400, {"error": "invalid_request"}),
+        ):
+            with self.subTest(status=status):
+                before = self.path.read_text()
+                opener = Mock(side_effect=[
+                    HTTPError(USAGE_URL, 401, "Unauthorized", {}, None),
+                    HTTPError(USAGE_URL, status, "test-refresh", {}, response(body)),
+                ])
+                with self.assertRaisesRegex(ClaudeClientError, f"HTTP {status}") as caught:
+                    self.client(opener).read_rate_limits()
+                self.assertNotIn("expired", str(caught.exception))
+                self.assertNotIn("claude auth login", str(caught.exception))
+                self.assertNotIn("test-refresh", str(caught.exception))
+                self.assertEqual(self.path.read_text(), before)
+
+    def test_forbidden_usage_does_not_claim_logout(self):
+        opener = Mock(side_effect=HTTPError(USAGE_URL, 403, "Forbidden", {}, None))
+        with self.assertRaisesRegex(ClaudeClientError, "access denied") as caught:
+            self.client(opener).read_rate_limits()
+        self.assertNotIn("claude auth login", str(caught.exception))
+
+    def test_picks_up_cli_token_rotation_without_restart_or_cached_old_usage(self):
+        opener = Mock(side_effect=[response(self.data), response(self.data)])
+        client = self.client(opener)
+        client.read_rate_limits()
+        document = json.loads(self.path.read_text())
+        document["claudeAiOauth"]["accessToken"] = "cli-new-access"
+        self.path.write_text(json.dumps(document))
+        client.read_rate_limits()
+        self.assertEqual(opener.call_count, 2)
+        self.assertEqual(opener.call_args.args[0].get_header("Authorization"), "Bearer cli-new-access")
+
+    def test_reuses_cli_token_rotated_during_failed_renewal(self):
+        def renewed_by_cli(*_args, **_kwargs):
+            document = json.loads(self.path.read_text())
+            document["claudeAiOauth"]["accessToken"] = "cli-new-access"
+            self.path.write_text(json.dumps(document))
+            raise HTTPError(USAGE_URL, 400, "Bad Request", {}, response({"error": "invalid_grant"}))
+
+        def request(req, **kwargs):
+            if req.get_method() == "POST":
+                return renewed_by_cli(req, **kwargs)
+            if req.get_header("Authorization") == "Bearer cli-new-access":
+                return response(self.data)
+            raise HTTPError(USAGE_URL, 401, "Unauthorized", {}, None)
+        opener = Mock(side_effect=request)
+        client = self.client(opener)
+        self.assertEqual(client.read_rate_limits().used_percent, 42)
+        self.assertEqual(opener.call_args.args[0].get_header("Authorization"), "Bearer cli-new-access")
+
+    def test_renewal_rate_limit_blocks_forced_reads(self):
+        opener = Mock(side_effect=[
+            HTTPError(USAGE_URL, 401, "Unauthorized", {}, None),
+            HTTPError(USAGE_URL, 429, "Slow down", {}, response({"error": "rate_limited"})),
+        ])
+        client = self.client(opener)
+        for force in (False, True):
+            with self.assertRaisesRegex(ClaudeClientError, "rate limited"):
+                client.read_rate_limits(force=force)
+        self.assertEqual(opener.call_count, 2)
 
     def test_rate_limit_blocks_even_forced_verification_reads(self):
         opener = Mock(side_effect=HTTPError(USAGE_URL, 429, "slow down", {}, None))
