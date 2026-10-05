@@ -273,6 +273,7 @@ class CodexWidgetApplication(WindowKeeperMixin, Gtk.Application):
             keeper._window_keeper_message,
         )
         self.window.show_loading(state.last_global_reset)
+        self.window.present_widget()
         self._start_usage_refresh()
 
     def _start_usage_refresh(self) -> None:

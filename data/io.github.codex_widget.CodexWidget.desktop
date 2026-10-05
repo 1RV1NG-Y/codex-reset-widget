@@ -8,4 +8,4 @@ Terminal=false
 Categories=Utility;
 Keywords=Codex;Claude;OpenAI;Anthropic;Usage;Reset;Widget;
 StartupWMClass=Codex-widget
-StartupNotify=false
+StartupNotify=true

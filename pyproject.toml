@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-widget"
-version = "0.2.1"
+version = "0.2.2"
 description = "A tiny Linux widget for Codex and Claude usage and reset notifications"
 requires-python = ">=3.11"
 license = { text = "MIT" }

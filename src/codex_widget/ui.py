@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 
 import gi
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+
+try:
+    gi.require_version("GdkX11", "3.0")
+    from gi.repository import GdkX11
+except (ImportError, ValueError):
+    GdkX11 = None
 
 from .models import ResetEvent, UsageSnapshot
 from .claude_client import USAGE_PAGE
@@ -112,6 +119,9 @@ class WidgetWindow(Gtk.ApplicationWindow):
         self.set_default_size(340, -1)
         self.set_border_width(12)
         self._dragging = False
+        self._hide_source: int | None = None
+        self._focused_since_open = False
+        self._dismiss_after = 0.0
         self._pointer_origin = (0.0, 0.0)
 
         self._keeper_syncing = False
@@ -224,6 +234,7 @@ class WidgetWindow(Gtk.ApplicationWindow):
 
         self.connect("key-press-event", self._on_key_press)
         self.connect("focus-out-event", self._on_focus_out)
+        self.connect("focus-in-event", self._on_focus_in)
         self.connect("delete-event", self._on_delete)
 
     def set_provider(self, name: str, can_switch: bool) -> None:
@@ -269,8 +280,18 @@ class WidgetWindow(Gtk.ApplicationWindow):
         self.banked_value.set_text("—")
         self._set_last_reset(last_reset)
         self.status.set_text(f"Reading your {self.provider_name.title()} account")
+
+    def present_widget(self) -> None:
+        self._cancel_pending_hide()
+        self._focused_since_open = self.is_active()
+        # Let the launcher/overview finish its focus transition before dismissing.
+        self._dismiss_after = time.monotonic() + 0.6
         self.show_all()
-        self.present()
+        timestamp = Gtk.get_current_event_time()
+        window = self.get_window()
+        if timestamp == Gdk.CURRENT_TIME and GdkX11 is not None and isinstance(window, GdkX11.X11Window):
+            timestamp = GdkX11.x11_get_server_time(window)
+        self.present_with_time(timestamp)
 
     def show_usage(
         self, usage: UsageSnapshot, last_reset: ResetEvent | None
@@ -300,8 +321,6 @@ class WidgetWindow(Gtk.ApplicationWindow):
         self.status.set_text(
             f"Updated {_relative_time(usage.checked_at)} ago · auto-refreshes every 60s"
         )
-        self.show_all()
-        self.present()
 
     def show_error(self, message: str, last_reset: ResetEvent | None) -> None:
         self.usage_value.set_text("Unavailable")
@@ -313,8 +332,6 @@ class WidgetWindow(Gtk.ApplicationWindow):
         self.banked_value.set_text("—")
         self._set_last_reset(last_reset)
         self.status.set_text(message)
-        self.show_all()
-        self.present()
 
     def set_window_keeper_state(self, enabled: bool, message: str) -> None:
         self._keeper_syncing = True
@@ -406,6 +423,7 @@ class WidgetWindow(Gtk.ApplicationWindow):
         pinned = button.get_active()
         self.set_keep_above(pinned)
         if pinned:
+            self._cancel_pending_hide()
             button.set_label("PINNED")
             button.set_tooltip_text("Unpin to restore click-outside dismissal")
             self.present()
@@ -414,6 +432,7 @@ class WidgetWindow(Gtk.ApplicationWindow):
             button.set_tooltip_text("Keep the widget above other windows")
 
     def _dismiss(self) -> None:
+        self._cancel_pending_hide()
         self.pin_button.set_active(False)
         self.hide()
 
@@ -424,11 +443,27 @@ class WidgetWindow(Gtk.ApplicationWindow):
         return False
 
     def _on_focus_out(self, _window: Gtk.Window, _event: Gdk.EventFocus) -> bool:
-        if not self.pin_button.get_active() and not self._dragging:
-            GLib.timeout_add(120, self._hide_if_inactive)
+        if (
+            self._focused_since_open and self.get_visible()
+            and not self.pin_button.get_active() and not self._dragging
+        ):
+            self._cancel_pending_hide()
+            delay = max(120, int((self._dismiss_after - time.monotonic()) * 1000) + 1)
+            self._hide_source = GLib.timeout_add(delay, self._hide_if_inactive)
+        return False
+
+    def _cancel_pending_hide(self) -> None:
+        if self._hide_source is not None:
+            GLib.source_remove(self._hide_source)
+            self._hide_source = None
+
+    def _on_focus_in(self, _window: Gtk.Window, _event: Gdk.EventFocus) -> bool:
+        self._focused_since_open = True
+        self._cancel_pending_hide()
         return False
 
     def _hide_if_inactive(self) -> bool:
+        self._hide_source = None
         if (
             not self.pin_button.get_active()
             and not self._dragging

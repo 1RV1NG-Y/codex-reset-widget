@@ -83,10 +83,9 @@ To update an existing installation:
 ```bash
 git pull --ff-only
 ./install-user.sh
-systemctl --user restart codex-widget.service
 ```
 
-Restarting the service loads the updated installed code. Then reopen **Codex Widget** from the tray or application menu.
+The installer restarts the background service with the updated code. Then reopen **Codex Widget** from the tray or application menu.
 
 After installation, search for **Codex Widget** in the GNOME application menu or run:
 
@@ -167,6 +166,18 @@ pause further Claude usage requests for five minutes, including forced reads.
 Claude state is kept separately in `claude-state.json` beside Codex's `state.json`.
 
 ## Startup and local state
+
+The enabled user service starts with your graphical session and owns the widget's
+single application instance. Opening the launcher starts that service if needed
+and waits for its application connection before asking it to show the window.
+Repeated launches reuse that same process, including immediately after a service
+restart. If automatic startup is disabled, or systemd is unavailable, the launcher
+runs the widget directly.
+
+The window requests focus when opened, allows the launcher focus transition to
+settle, and cancels pending dismissal timers when reopened. Account refreshes only
+update the visible card. An unpinned widget still dismisses when it loses focus;
+pinning keeps it visible, and Escape closes it.
 
 Manage automatic startup with:
 

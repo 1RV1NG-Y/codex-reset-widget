@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 — 2026-10-05
+
+- Make launchers wait for the enabled background service to own the application connection, preventing launch/restart races. Start the service with the graphical session, restart the installed app when updating, and allow rapid manual restarts while retaining ten-second crash retry backoff.
+- Request focus with a fresh timestamp, allow launcher focus transitions to settle, and cancel pending dismissal timers when reopened or focused.
+- Keep usage updates from raising or reopening the window. Preserve normal click-outside dismissal, pinning and Escape behavior.
+
 ## 0.2.1 — 2026-10-04
 
 - Fix Claude token renewal requests by including saved OAuth scopes and the widget user agent, and save rotated access/refresh tokens with both expiry times.
