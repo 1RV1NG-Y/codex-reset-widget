@@ -1,0 +1,8 @@
+{
+  "uuid": "codex-widget@codex_widget.github.io",
+  "name": "Codex & Claude Usage",
+  "description": "Top-bar panel for the Codex Widget daemon: Codex and Claude five-hour and weekly usage, resets and auto-roll.",
+  "shell-version": ["48", "49", "50", "51"],
+  "url": "https://github.com/1RV1NG-Y/codex-reset-widget",
+  "version": 1
+}

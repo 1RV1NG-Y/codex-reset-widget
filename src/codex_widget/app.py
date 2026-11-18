@@ -22,16 +22,19 @@ except (ImportError, ValueError):
 from .claude_client import ClaudeClient, detect_claude
 from .codex_client import CodexClient, CodexClientError
 from .models import ResetEvent, UsageSnapshot, utc_now
+from .panel_service import PanelService
 from .state import StateStore
 from .tracker import TrackerClient, TrackerError
 from .ui import WidgetWindow
 from .watcher import PollOutcome, ResetWatcher, account_reset_observed
-from .window_keeper import ClaudeWindowKeeper, WindowKeeperMixin
+from .window_keeper import ClaudeWindowKeeper, WindowKeeperMixin, _notify_panel
 
 _APPLICATION_ID = "io.github.codex_widget.CodexWidget"
 _DEFAULT_POLL_SECONDS = 60
 _USAGE_REFRESH_SECONDS = 60
 _RESET_NOTIFICATION_MAX_AGE = timedelta(hours=6)
+_PANEL_BACKGROUND_REFRESH_SECONDS = 300
+_PANEL_MIN_REFRESH_SECONDS = 20
 
 
 class CodexWidgetApplication(WindowKeeperMixin, Gtk.Application):
@@ -68,6 +71,9 @@ class CodexWidgetApplication(WindowKeeperMixin, Gtk.Application):
         self._window_keeper_watchdog_source: int | None = None
         self._window_keeper_busy = False
         self._window_keeper_message = "Automatic 5-hour rolling is off"
+        self._provider_errors: dict[str, str | None] = {}
+        self._panel_usage_source: int | None = None
+        self.panel = PanelService(self)
 
     def do_startup(self) -> None:
         Gtk.Application.do_startup(self)
@@ -82,6 +88,92 @@ class CodexWidgetApplication(WindowKeeperMixin, Gtk.Application):
         quit_action.connect("activate", lambda *_args: self.quit())
         self.add_action(quit_action)
         self._create_tray_indicator()
+
+    def do_dbus_register(self, connection: Gio.DBusConnection, object_path: str) -> bool:
+        # Runs before the bus name is acquired, so a panel that sees the name
+        # appear can always reach the Panel object.
+        if not Gtk.Application.do_dbus_register(self, connection, object_path):
+            return False
+        self.panel.register(connection)
+        return True
+
+    def do_dbus_unregister(self, connection: Gio.DBusConnection, object_path: str) -> None:
+        self.panel.unregister()
+        Gtk.Application.do_dbus_unregister(self, connection, object_path)
+
+    # -- GNOME Shell panel bridge -------------------------------------------
+
+    def _publish_panel_state(self) -> None:
+        panel = getattr(self, "panel", None)
+        if panel is not None:
+            panel.publish()
+
+    def panel_attachment_changed(self, attached: bool) -> None:
+        """Hide the AppIndicator while the native panel extension is present."""
+        indicator = self._indicator
+        if AyatanaAppIndicator3 is not None and isinstance(
+            indicator, AyatanaAppIndicator3.Indicator
+        ):
+            indicator.set_status(
+                AyatanaAppIndicator3.IndicatorStatus.PASSIVE
+                if attached
+                else AyatanaAppIndicator3.IndicatorStatus.ACTIVE
+            )
+        elif isinstance(indicator, Gtk.StatusIcon):
+            indicator.set_visible(not attached)
+        if attached and self._panel_usage_source is None:
+            self._panel_usage_source = GLib.timeout_add_seconds(
+                _PANEL_BACKGROUND_REFRESH_SECONDS, self._panel_background_tick
+            )
+        elif not attached and self._panel_usage_source is not None:
+            GLib.source_remove(self._panel_usage_source)
+            self._panel_usage_source = None
+
+    def _panel_background_tick(self) -> bool:
+        # Keeps the top-bar percentage current; Claude has its own 5m poll.
+        self.panel_refresh("codex", force=False)
+        return GLib.SOURCE_CONTINUE
+
+    def panel_refresh(self, provider: str, *, force: bool) -> None:
+        if provider == "claude":
+            self.claude_executable = detect_claude()
+            if self.claude_executable:
+                self.claude_keeper.codex.executable = self.claude_executable
+                self._start_claude_polling()
+                if force or self._usage_is_stale(self.claude_keeper.state_store):
+                    self._refresh_claude_usage()
+            _notify_panel(self)
+            return
+        if force:
+            self._poll_tick()
+        if self._usage_refreshing or not (
+            force or self._usage_is_stale(self.state_store)
+        ):
+            return
+        self._usage_refreshing = True
+        self._run_async(self._read_and_store_usage, self._usage_refresh_finished)
+        _notify_panel(self)
+
+    @staticmethod
+    def _usage_is_stale(store: StateStore) -> bool:
+        usage = store.load().last_known_usage
+        return (
+            usage is None
+            or (utc_now() - usage.checked_at).total_seconds()
+            >= _PANEL_MIN_REFRESH_SECONDS
+        )
+
+    def set_provider_auto_roll(self, provider: str, enabled: bool) -> None:
+        if provider == "claude":
+            if self.claude_executable:
+                self.claude_keeper.set_window_keeper_enabled(enabled)
+        else:
+            WindowKeeperMixin.set_window_keeper_enabled(self, enabled)
+        if self.window is not None and self.window.get_visible():
+            keeper = self.claude_keeper if self.selected_provider == "claude" else self
+            self.window.set_window_keeper_state(
+                keeper._window_keeper_enabled(), keeper._window_keeper_message
+            )
 
     def _create_tray_indicator(self) -> None:
         menu = Gtk.Menu()
@@ -233,6 +325,7 @@ class CodexWidgetApplication(WindowKeeperMixin, Gtk.Application):
         outcome, event, previous_usage = result
         if outcome is not PollOutcome.NEW_RESET:
             return
+        _notify_panel(self)
         if event.announced_at < utc_now() - _RESET_NOTIFICATION_MAX_AGE:
             if (
                 self.window is not None
@@ -314,6 +407,15 @@ class CodexWidgetApplication(WindowKeeperMixin, Gtk.Application):
         self, usage: UsageSnapshot | None, error: BaseException | None
     ) -> None:
         self._usage_refreshing = False
+        if error is not None or usage is None:
+            self._provider_errors["codex"] = (
+                str(error) if error is not None else "Codex account is unavailable"
+            )
+        else:
+            self._provider_errors["codex"] = None
+            if self._window_keeper_enabled() and not self._window_keeper_busy:
+                self._schedule_window_keeper_from_usage(usage)
+        _notify_panel(self)
         if (
             self.window is None
             or not self.window.get_visible()
@@ -326,8 +428,6 @@ class CodexWidgetApplication(WindowKeeperMixin, Gtk.Application):
             self.window.show_error(message, state.last_global_reset)
             return
         self.window.show_usage(usage, state.last_global_reset)
-        if self._window_keeper_enabled() and not self._window_keeper_busy:
-            self._schedule_window_keeper_from_usage(usage)
 
     def _reset_account_check_finished(
         self,
@@ -348,6 +448,7 @@ class CodexWidgetApplication(WindowKeeperMixin, Gtk.Application):
         else:
             body = "⏳ Tibo announced a reset. Your account is still updating."
         self._send_reset_notification(event, body, final=True)
+        _notify_panel(self)
         if self.window is not None and self.window.get_visible() and self.selected_provider == "codex":
             self.window.show_usage(usage, event)
 
@@ -357,6 +458,18 @@ class CodexWidgetApplication(WindowKeeperMixin, Gtk.Application):
         self._show_provider("claude" if self.selected_provider == "codex" else "codex")
 
     def _show_provider(self, provider: str) -> None:
+        self._store_selected_provider(provider)
+        self.show_widget()
+
+    def select_provider(self, provider: str) -> None:
+        """Switch providers from the panel without opening the widget."""
+        self._store_selected_provider(provider)
+        if self.window is not None and self.window.get_visible():
+            self.show_widget()
+        else:
+            self.panel_refresh(self.selected_provider, force=False)
+
+    def _store_selected_provider(self, provider: str) -> None:
         self.selected_provider = (
             "claude" if provider == "claude" and detect_claude() else "codex"
         )
@@ -364,7 +477,7 @@ class CodexWidgetApplication(WindowKeeperMixin, Gtk.Application):
             state = self.state_store.load()
             state.selected_provider = self.selected_provider
             self.state_store.save(state)
-        self.show_widget()
+        _notify_panel(self)
 
     def set_window_keeper_enabled(self, enabled: bool) -> None:
         if getattr(self, "selected_provider", "codex") == "claude":
@@ -382,10 +495,16 @@ class CodexWidgetApplication(WindowKeeperMixin, Gtk.Application):
             return
         self._claude_refreshing = True
         self._run_async(self.claude_keeper._read_and_store_usage, self._claude_usage_finished)
+        _notify_panel(self)
 
     def _claude_usage_finished(self, usage: UsageSnapshot | None, error: BaseException | None) -> None:
         self._claude_refreshing = False
         keeper = self.claude_keeper
+        self._provider_errors["claude"] = (
+            None if usage is not None and error is None
+            else str(error) if error else "Claude account is unavailable"
+        )
+        _notify_panel(self)
         if usage is not None and keeper._window_keeper_enabled() and not keeper._window_keeper_busy:
             keeper._schedule_window_keeper_from_usage(usage)
         if self.window is None or not self.window.get_visible() or self.selected_provider != "claude":

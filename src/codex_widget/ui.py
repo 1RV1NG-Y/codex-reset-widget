@@ -22,54 +22,60 @@ window.codex-widget {
   background-color: transparent;
 }
 #card {
-  background-color: #111318;
-  border: 1px solid #2d313b;
-  border-radius: 16px;
-  color: #f4f5f7;
+  background-color: #2a2a2f;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 22px;
+  color: #ffffff;
   padding: 20px;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35);
 }
-#brand { color: #f4f5f7; font-size: 15px; font-weight: 800; letter-spacing: 1px; }
-#provider-switch { background: transparent; border: none; box-shadow: none; padding: 0; }
-#provider-switch:hover #brand { color: #60a5fa; }
+#brand { color: #ffffff; font-size: 14px; font-weight: 800; letter-spacing: 0.5px; }
+#provider-switch {
+  background: rgba(255, 255, 255, 0.07);
+  border: none;
+  border-radius: 10px;
+  box-shadow: none;
+  padding: 5px 12px;
+}
+#provider-switch:hover { background: rgba(255, 255, 255, 0.13); }
 #provider-switch:disabled { opacity: 1; }
-#reset-offers { background: transparent; border: none; box-shadow: none; padding: 0; color: #aeb4bf; font-size: 13px; }
-#reset-offers:hover { color: #fb923c; }
-#muted { color: #8c93a2; font-size: 12px; }
-#label { color: #aeb4bf; font-size: 13px; }
-#value { color: #f4f5f7; font-size: 13px; font-weight: 700; }
-#status { color: #8c93a2; font-size: 12px; }
+#reset-offers {
+  background: transparent; border: none; box-shadow: none; padding: 4px 0;
+  color: #f0a283; font-size: 13px; font-weight: 700;
+}
+#reset-offers:hover { color: #ffffff; }
+#muted { color: rgba(255, 255, 255, 0.4); font-size: 10px; font-weight: 700; letter-spacing: 0.5px; }
+#label { color: rgba(255, 255, 255, 0.65); font-size: 13px; }
+#value { color: #ffffff; font-size: 13px; font-weight: 700; font-feature-settings: "tnum"; }
+#status { color: rgba(255, 255, 255, 0.45); font-size: 11px; }
 #pin {
-  background: #20242d;
-  border: 1px solid #3a404c;
-  border-radius: 7px;
-  color: #aeb4bf;
+  background: rgba(255, 255, 255, 0.07);
+  border: none;
+  border-radius: 99px;
+  color: rgba(255, 255, 255, 0.75);
   font-size: 10px;
   font-weight: 700;
-  padding: 2px 7px;
+  padding: 3px 10px;
 }
-#pin:hover { border-color: #60a5fa; color: #f4f5f7; }
-#pin:checked { background: #2563eb; border-color: #60a5fa; color: #ffffff; }
+#pin:hover { background: rgba(255, 255, 255, 0.13); color: #ffffff; }
+#pin:checked { background: #4c8df6; color: #ffffff; }
 #keeper {
-  background: #20242d;
-  border: 1px solid #3a404c;
-  border-radius: 8px;
-  color: #aeb4bf;
+  background: rgba(255, 255, 255, 0.07);
+  border: none;
+  border-radius: 12px;
+  color: rgba(255, 255, 255, 0.85);
   font-size: 11px;
   font-weight: 700;
-  padding: 7px 10px;
+  padding: 9px 12px;
 }
-#keeper:hover { border-color: #60a5fa; color: #f4f5f7; }
-#keeper:checked { background: #163a66; border-color: #60a5fa; color: #ffffff; }
-#keeper-status { color: #8c93a2; font-size: 11px; }
-progressbar trough { min-height: 8px; border-radius: 8px; background: #292d36; }
-progressbar progress { min-height: 8px; border-radius: 8px; background: #60a5fa; border-color: #60a5fa; box-shadow: none; }
-window.claude-widget progressbar progress { background: #fb923c; border-color: #fb923c; }
-window.claude-widget #provider-switch:hover #brand { color: #fb923c; }
-window.claude-widget #pin:hover { border-color: #fb923c; }
-window.claude-widget #pin:checked { background: #c45f32; border-color: #fb923c; }
-window.claude-widget #keeper:hover { border-color: #fb923c; }
-window.claude-widget #keeper:checked { background: #5b301e; border-color: #fb923c; }
+#keeper:hover { background: rgba(255, 255, 255, 0.13); color: #ffffff; }
+#keeper:checked { background: #4c8df6; color: #ffffff; }
+#keeper-status { color: rgba(255, 255, 255, 0.5); font-size: 11px; }
+progressbar trough { min-height: 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.08); border: none; }
+progressbar progress { min-height: 10px; border-radius: 10px; background: #6ba8ff; border: none; box-shadow: none; }
+window.claude-widget progressbar progress { background: #d97757; }
+window.claude-widget #pin:checked { background: #c96442; }
+window.claude-widget #keeper:checked { background: #c96442; }
 """
 
 
@@ -147,7 +153,7 @@ class WidgetWindow(Gtk.ApplicationWindow):
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         draggable_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.dot = Gtk.Label(label="●")
-        self.dot.set_markup('<span foreground="#60a5fa">●</span>')
+        self.dot.set_markup('<span foreground="#6ba8ff">●</span>')
         self.brand = Gtk.Label(label="CODEX", xalign=0)
         self.brand.set_name("brand")
         self.provider_button = Gtk.Button()
@@ -242,7 +248,7 @@ class WidgetWindow(Gtk.ApplicationWindow):
         claude = name == "claude"
         self.brand.set_text(name.upper())
         self.set_title("Claude Widget" if claude else "Codex Widget")
-        color = "#fb923c" if claude else "#60a5fa"
+        color = "#d97757" if claude else "#6ba8ff"
         self.dot.set_markup(f'<span foreground="{color}">●</span>')
         context = self.get_style_context()
         if claude:

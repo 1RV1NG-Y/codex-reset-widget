@@ -10,6 +10,8 @@ VENV_DIR="$APP_HOME/venv"
 DESKTOP_DIR="$DATA_HOME/applications"
 ICON_DIR="$DATA_HOME/icons/hicolor/scalable/status"
 SYSTEMD_DIR="$CONFIG_HOME/systemd/user"
+EXTENSION_UUID="codex-widget@codex_widget.github.io"
+EXTENSION_DIR="$DATA_HOME/gnome-shell/extensions/$EXTENSION_UUID"
 
 python3 -m venv --system-site-packages "$VENV_DIR"
 "$VENV_DIR/bin/pip" install --no-deps --upgrade "$PROJECT_DIR"
@@ -55,6 +57,28 @@ fi
 if [ "$SERVICE_CHANGED" = true ]; then
   systemctl --user daemon-reload
 fi
+# GNOME Shell top-bar panel. The daemon keeps its AppIndicator as a fallback
+# and hides it automatically whenever this extension is running.
+EXTENSION_CHANGED=false
+if command -v gnome-shell >/dev/null 2>&1; then
+  if ! diff -rq "$PROJECT_DIR/gnome-extension/$EXTENSION_UUID" "$EXTENSION_DIR" >/dev/null 2>&1; then
+    rm -rf "$EXTENSION_DIR"
+    mkdir -p "$(dirname -- "$EXTENSION_DIR")"
+    cp -r "$PROJECT_DIR/gnome-extension/$EXTENSION_UUID" "$EXTENSION_DIR"
+    EXTENSION_CHANGED=true
+  fi
+  if ! gnome-extensions enable "$EXTENSION_UUID" >/dev/null 2>&1; then
+    # A brand-new extension is unknown to a running Wayland shell until the
+    # next login, so record it as enabled directly.
+    ENABLED=$(gsettings get org.gnome.shell enabled-extensions 2>/dev/null || echo "@as []")
+    case "$ENABLED" in
+      *"'$EXTENSION_UUID'"*) ;;
+      "@as []"|"[]") gsettings set org.gnome.shell enabled-extensions "['$EXTENSION_UUID']" ;;
+      *) gsettings set org.gnome.shell enabled-extensions "${ENABLED%]}, '$EXTENSION_UUID']" ;;
+    esac
+  fi
+fi
+
 # Stop an old interactive primary too, then let systemd claim the bus name.
 "$BIN_DIR/codex-widget" --quit
 systemctl --user reenable codex-widget.service
@@ -62,3 +86,6 @@ systemctl --user reset-failed codex-widget.service
 systemctl --user restart codex-widget.service
 
 printf '%s\n' "Codex Widget installed. Open it from GNOME or run: $BIN_DIR/codex-widget"
+if [ "$EXTENSION_CHANGED" = true ]; then
+  printf '%s\n' "Top-bar panel installed. Log out and back in once so GNOME Shell loads it."
+fi

@@ -28,6 +28,12 @@ def _keeper_view_is_visible(keeper: Any) -> bool:
     )
 
 
+def _notify_panel(keeper: Any) -> None:
+    publish = getattr(keeper, "_publish_panel_state", None)
+    if publish is not None:
+        publish()
+
+
 class WindowKeeperMixin:
     """Shared scheduler; ``codex`` is the legacy name of its usage client."""
 
@@ -441,12 +447,14 @@ class WindowKeeperMixin:
             )
             return
         self._schedule_window_keeper_from_usage(usage)
+        _notify_panel(self)
         if _keeper_view_is_visible(self) and self.window.get_visible():
             state = self.state_store.load()
             self.window.show_usage(usage, state.last_global_reset)
 
     def _set_window_keeper_message(self, message: str) -> None:
         self._window_keeper_message = message
+        _notify_panel(self)
         if _keeper_view_is_visible(self):
             self.window.set_window_keeper_state(
                 self._window_keeper_enabled(),
@@ -479,6 +487,11 @@ class ClaudeWindowKeeper(WindowKeeperMixin):
 
     def _run_async(self, work: Callable, done: Callable) -> None:
         self.application._run_async(work, done)
+
+    def _publish_panel_state(self) -> None:
+        publish = getattr(self.application, "_publish_panel_state", None)
+        if publish is not None:
+            publish()
 
     def start(self) -> None:
         if self._window_keeper_enabled():
